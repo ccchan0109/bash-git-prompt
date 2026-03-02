@@ -345,8 +345,13 @@ function setGitPrompt() {
 
   git_prompt_config
 
-  if [[ ! -e "${repo}" ]] || [[ "${GIT_PROMPT_DISABLE-}" = 1 ]]; then
+  if [[ "${GIT_PROMPT_DISABLE-}" = 1 ]]; then
     PS1="${EMPTY_PROMPT}"
+    return
+  fi
+
+  if [[ ! -e "${repo}" ]]; then
+    updatePrompt
     return
   fi
 
@@ -541,13 +546,39 @@ function updatePrompt() {
   export __GIT_PROMPT_SHOW_UNTRACKED_FILES="${GIT_PROMPT_SHOW_UNTRACKED_FILES-normal}"
   export __GIT_PROMPT_SHOW_CHANGED_FILES_COUNT="${GIT_PROMPT_SHOW_CHANGED_FILES_COUNT:-1}"
 
-  local GIT_INDEX_PRIVATE="$(createPrivateIndex)"
-  #important to define GIT_INDEX_FILE as local: This way it only affects this function (and below) - even with the export afterwards
-  local GIT_INDEX_FILE
-  export GIT_INDEX_FILE="${GIT_INDEX_PRIVATE}"
+  local DEVICE_PROMPT=""
+  local cog_ws=""
+  local device_seg=""
+  # cog workspace name, derived from ANDROID_BUILD_TOP (set by gm or lunch)
+  if [[ "${ANDROID_BUILD_TOP:-}" =~ ^/google/cog/cloud/[^/]+/([^/]+)/ ]]; then
+    cog_ws="${BASH_REMATCH[1]}"
+  fi
+  if [ -n "${ANDROID_SERIAL:-}" ]; then
+    local device status
+    if [[ -n "${_g_device_map[${ANDROID_SERIAL}]:-}" ]]; then
+      read -r device status <<< "${_g_device_map[${ANDROID_SERIAL}]}"
+      device_seg="${Green}${device}${ResetColor}|${Cyan}${ANDROID_SERIAL: -4}${ResetColor}"
+    fi
+  fi
+  if [[ -n "${cog_ws}" && -n "${device_seg}" ]]; then
+    DEVICE_PROMPT=" [${BoldMagenta}${cog_ws}${ResetColor} ▸ ${device_seg}]"
+  elif [[ -n "${cog_ws}" ]]; then
+    DEVICE_PROMPT=" [${BoldMagenta}${cog_ws}${ResetColor}]"
+  elif [[ -n "${device_seg}" ]]; then
+    DEVICE_PROMPT=" [${device_seg}]"
+  fi
 
+  local GIT_INDEX_PRIVATE
   local -a git_status_fields
-  while IFS=$'\n' read -r line; do git_status_fields+=("${line}"); done < <("${__GIT_STATUS_CMD}" 2>/dev/null)
+
+  if [[ "$(we_are_on_repo)" == "1" ]]; then
+    GIT_INDEX_PRIVATE="$(createPrivateIndex)"
+    #important to define GIT_INDEX_FILE as local: This way it only affects this function (and below) - even with the export afterwards
+    local GIT_INDEX_FILE
+    export GIT_INDEX_FILE="${GIT_INDEX_PRIVATE}"
+
+    while IFS=$'\n' read -r line; do git_status_fields+=("${line}"); done < <("${__GIT_STATUS_CMD}" 2>/dev/null)
+  fi
 
   export GIT_BRANCH=$(replaceSymbols "${git_status_fields[@]:0:1}")
   if [[ $__GIT_PROMPT_SHOW_TRACKING != "0" ]]; then
@@ -635,16 +666,23 @@ function updatePrompt() {
     __add_status        "${ResetColor}${GIT_PROMPT_SUFFIX}"
 
     if [[ "${GIT_PROMPT_VIRTUAL_ENV_AFTER_PROMPT:-0}" == "0" ]]; then
-      NEW_PROMPT="$(gp_add_virtualenv_to_prompt)${PROMPT_START}$(${prompt_callback})${STATUS_PREFIX}${STATUS}${PROMPT_END}"
+      NEW_PROMPT="$(gp_add_virtualenv_to_prompt)${PROMPT_START}$(${prompt_callback})${STATUS_PREFIX}${STATUS}${DEVICE_PROMPT}${PROMPT_END}"
     else
-      NEW_PROMPT="${PROMPT_START}$(${prompt_callback})$(gp_add_virtualenv_to_prompt)${STATUS_PREFIX}${STATUS}${PROMPT_END}"
+      NEW_PROMPT="${PROMPT_START}$(${prompt_callback})$(gp_add_virtualenv_to_prompt)${STATUS_PREFIX}${STATUS}${DEVICE_PROMPT}${PROMPT_END}"
     fi
   else
-    NEW_PROMPT="${EMPTY_PROMPT}"
+    if [[ "${GIT_PROMPT_VIRTUAL_ENV_AFTER_PROMPT:-0}" == "0" ]]; then
+      NEW_PROMPT="$(gp_add_virtualenv_to_prompt)${PROMPT_START}$(${prompt_callback})${DEVICE_PROMPT}${PROMPT_END}"
+    else
+      NEW_PROMPT="${PROMPT_START}$(${prompt_callback})$(gp_add_virtualenv_to_prompt)${DEVICE_PROMPT}${PROMPT_END}"
+    fi
   fi
 
   PS1="${NEW_PROMPT//_LAST_COMMAND_INDICATOR_/${LAST_COMMAND_INDICATOR}${ResetColor}}"
-  command rm "${GIT_INDEX_PRIVATE}" 2>/dev/null
+
+  if [[ -n "${GIT_INDEX_PRIVATE}" ]]; then
+    command rm "${GIT_INDEX_PRIVATE}" 2>/dev/null
+  fi
 }
 
 # Helper function that returns virtual env information to be set in prompt
